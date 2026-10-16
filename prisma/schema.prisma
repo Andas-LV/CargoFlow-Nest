@@ -1,0 +1,114 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  shipments    Shipment[]
+  telegramLink TelegramLink?
+
+  @@map("users")
+}
+
+// Справочник станций КЗ. Заполняется при старте из data/stations_kz.csv.
+// Данные: © OpenStreetMap contributors (ODbL).
+model Station {
+  id     String @id // "osm-n922818608"
+  esr    String @default("") // 6 цифр или ""
+  kind   String // "station" | "halt"
+  name   String
+  nameRu String @map("name_ru")
+  nameKk String @default("") @map("name_kk")
+  nameEn String @default("") @map("name_en")
+  lat    Float
+  lon    Float
+
+  originOf      Shipment[] @relation("origin")
+  destinationOf Shipment[] @relation("destination")
+  positions     Position[]
+
+  @@index([esr])
+  @@map("stations")
+}
+
+enum CargoType {
+  wagon
+  container
+}
+
+enum ShipmentStatus {
+  created
+  in_transit
+  delivered
+  cancelled
+}
+
+model Shipment {
+  id                   String         @id @db.Uuid
+  ownerId              String         @map("owner_id") @db.Uuid
+  cargoType            CargoType      @map("cargo_type")
+  status               ShipmentStatus
+  originStationId      String         @map("origin_station_id")
+  destinationStationId String         @map("destination_station_id")
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  owner       User       @relation(fields: [ownerId], references: [id])
+  origin      Station    @relation("origin", fields: [originStationId], references: [id])
+  destination Station    @relation("destination", fields: [destinationStationId], references: [id])
+  positions   Position[]
+
+  @@index([ownerId, createdAt(sort: Desc)])
+  @@map("shipments")
+}
+
+model Position {
+  // Для позиций из событий id = eventId: повторная доставка события ничего не дублирует.
+  id         String   @id @db.Uuid
+  shipmentId String   @map("shipment_id") @db.Uuid
+  stationId  String   @map("station_id")
+  station    String // название (рус.) на момент записи
+  lat        Float    @default(0)
+  lon        Float    @default(0)
+  source     String // "manual" | "shipment.created"
+  recordedAt DateTime @map("recorded_at") @db.Timestamptz
+
+  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+  stationRef Station  @relation(fields: [stationId], references: [id])
+
+  @@index([shipmentId, recordedAt])
+  @@map("positions")
+}
+
+model TelegramLink {
+  userId   String   @id @map("user_id") @db.Uuid // у пользователя максимум один чат
+  chatId   BigInt   @map("chat_id")
+  linkedAt DateTime @default(now()) @map("linked_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@map("telegram_links")
+}
+
+// Transactional outbox: событие пишется в той же транзакции, что и изменение данных.
+model Outbox {
+  id        String    @id @db.Uuid // = eventId
+  subject   String // "shipment.created" и т.д.
+  payload   Json
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  sentAt    DateTime? @map("sent_at") @db.Timestamptz
+
+  // Частичный индекс outbox_unsent_idx (created_at) WHERE sent_at IS NULL создан в SQL миграции:
+  // Prisma не умеет описывать частичные индексы и не трогает их, поэтому в схеме его нет.
+  @@map("outbox")
+}

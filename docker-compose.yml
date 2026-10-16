@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: cargo
+      POSTGRES_PASSWORD: cargo
+      POSTGRES_DB: cargoflow
+    ports: ["5434:5432"] # 5432 часто занят локальным PostgreSQL
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cargo -d cargoflow"]
+      interval: 2s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"] # BullMQ лучше не терять при рестарте
+    ports: ["6380:6379"] # 6379 часто занят локальным Redis (например, в WSL)
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+
+volumes:
+  pgdata:
